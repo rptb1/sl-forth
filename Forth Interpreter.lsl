@@ -37,10 +37,10 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 202;          // Script version
+integer version = 204;          // Script version
 integer debug = 2;              // Debugging level, 0 for none
 
-string program = "Forth Program"; // Program notecard name
+string program = "Forth Program"; // Program notecard name or empty for none.
 string lib_prefix = "Forth Library "; // Library script name prefix
 list lib_scripts;               // Potential library scripts
 list libs;                      // Registered library scripts
@@ -56,6 +56,8 @@ list rands;                     // Operand (parameter) stack
 list rators;                    // Operator (return, linkage) stack
 integer pc = -1;                // Program counter, indexes "nodes".
 integer compiling;              // Are we compiling or executing?
+integer listen_channel = 3;     // Channel to listen for commands
+integer listen_handle;          // Listen handle for further commands
 
 // Nucleus dictionary
 // It's possible to make a more primitive nucleus with things like
@@ -131,6 +133,7 @@ dump() {
     llOwnerSay("dict = " + llDumpList2String(dict, " "));
     llOwnerSay("nodes = " + llDumpList2String(nodes, " "));
     llOwnerSay("compiling = " + (string)compiling);
+    llOwnerSay((string)llGetFreeMemory() + " bytes free");
 }
 
 run() {
@@ -252,9 +255,25 @@ run() {
         jump next_word0;
     }
 
-    // No segments either, so ask for the next line of the
-    // program and wait for it to arrive.
-    program_query = llGetNotecardLine(program, program_line++);
+    // No segments either.  Is there a notecard to read?  If so ask
+    // for the next line of the program and wait for it to arrive.
+    if (program != "") {
+        program_query = llGetNotecardLine(program, program_line++);
+        return;
+    }
+    
+    // No program notecard left to read, so listen for further
+    // instructions.
+    llOwnerSay("End of program.  Listening on channel " + (string)listen_channel + ".");
+    listen_handle = llListen(listen_channel, "", llGetOwner(), "");
+}
+
+run_string(string s) {
+    segs = llParseString2List(s, [], ["\""]);
+    seg_index = 0;
+    words = [];
+    word_index = 0;
+    run();
 }
 
 default {
@@ -315,8 +334,8 @@ state go {
         trace(2, "dataserver(" + (string)queryid + ", \"" + data + "\")");
         if(queryid != program_query) return;
         if(data == EOF) {
-            llOwnerSay("End of program.");
-            // dump();
+            program = "";
+            run();
             return;
         }
         data = llStringTrim(data, STRING_TRIM);
@@ -324,11 +343,20 @@ state go {
             program_query = llGetNotecardLine(program, program_line++);
             return;
         }
-        segs = llParseString2List(data, [], ["\""]);
-        seg_index = 0;
-        words = [];
-        word_index = 0;
-        run();
+        run_string(data);
+    }
+    
+    listen(integer channel, string name, key id, string message) {
+        trace(2, "listen(" + (string)channel + ", \"" + name + "\", " + (string)id + ", \"" + message + "\")");
+        if (channel != listen_channel && id != llGetOwner()) return;
+        if (llGetSubString(message, 0, 0) == ":") { // control
+            if (message == ":reset") llResetScript();
+            else if (message == ":dump") dump();
+            else
+                llOwnerSay("ERROR: Unknown control command \"" + message + "\".");
+            return;
+        }
+        run_string(message);
     }
 
     link_message(integer sender_num, integer num, string str, key id) {
@@ -337,5 +365,16 @@ state go {
         rands = llParseString2List(str, ["|"], []);
         ret();
         run();
+    }
+    
+    touch_start(integer num_detected) {
+        integer i;
+        for (i = 0; i < num_detected; ++i)
+            if (llDetectedKey(i) == llGetOwner())
+                llDialog(llGetOwner(),
+                         "Forth Interpreter v" + (string)version + "\n" +
+                         "Command?",
+                         [":dump", ":reset"],
+                         listen_channel);
     }
 }

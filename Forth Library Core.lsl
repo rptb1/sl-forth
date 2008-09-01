@@ -7,7 +7,7 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 201;          // Script version
+integer version = 202;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 list rands;                     // Operand stack
@@ -23,6 +23,7 @@ list dict = [
     "swap", -1202, FALSE,
     "over", -1203, FALSE,
     "2dup", -1204, FALSE,
+    "pick", -1205, FALSE,
     "append", -1300, FALSE
 ];
 
@@ -98,6 +99,9 @@ default {
             push_string(llList2String(rands, 1));
         } else if(num == -1204) { // 2dup
             rands = (rands=[]) + llList2List(rands, 0, 1) + rands;
+        } else if(num == -1205) { // pick
+            integer i = pop_integer();
+            push_string(llList2String(rands, i));
         } else if(num == -1300) { // append
             string y = pop_string();
             string x = pop_string();
