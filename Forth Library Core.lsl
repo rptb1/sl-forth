@@ -70,7 +70,7 @@ default {
             return;
         }
         // Unpack the operand stack.
-        rands = llParseString2List(str, ["|"], []);
+        rands = llParseStringKeepNulls(str, ["|"], []);
 
         if(num == -1000)        // +
             push_integer(pop_integer() + pop_integer());

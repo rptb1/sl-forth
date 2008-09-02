@@ -8,9 +8,9 @@
 // <http://en.wikipedia.org/wiki/Forth_(programming_language)>.
 //
 // Each line of the program is split into "segments" delimited by double
-// quotes.  Alternate segments are words to be interpreted, and strings
+// quotes.    Alternate segments are words to be interpreted, and strings
 // to be pushed on to the stack.  The word segments are split into words
-// delimeted by spaces.  Words that start with digits are assumed to be
+// delimeted by spaces.     Words that start with digits are assumed to be
 // integers (any trailing junk is discarded) to be pushed on to the stack.
 // Other words are looked up in the dictionary and either executed or
 // compiled, depending on the current mode.
@@ -27,18 +27,35 @@
 // -50 = define word
 // -51 = end word definition
 // Opcodes <= -100 cause link messages and the interpreter waits
-// for a reply.  The operand stack is packed up in the link message string
+// for a reply.     The operand stack is packed up in the link message string
 // separated by vertical bars ("|") and the reply should have a number of
-// -1 and a replacement stack similarly packed.  The key is not used.
+// -1 and a replacement stack similarly packed.     The key is not used.
 //
 // TODO
 // 1. There could be a stack of program notecards and notecard lines, so
-//    that programs could execute each other.  This would be easy to add.
+//      that programs could execute each other.  This would be easy to add.
+// 2. The interpreter does not listen for commands until it has finished
+//    compiling the notecards, but it should listen to out-of-band commands
+//    to stop or reset etc.
+// 3. If there is an error compiling the notecard the interpreter just stops
+//    and does not listen for commands.  It has to be reset to fix the
+//    the problem.
+// 4. The interpreter should perhaps only listen for a limited period when
+//    it is touched, like hippoINVENTORY, to reduce server lag when it is not
+//    in use.
+// 5. The listen channel and other options should be configurable via a
+//    notecard in case the interpreter is given away without permission to
+//    alter it.
+// 6. There should perhaps be a way of dumping the compiled nodes and
+//    dictionary to a script which could also be protected so that Forth
+//    developers can give away unmodifiable compiled Forth systems.
+// 7. There are no branching or looping structures and these can't be
+//    provided by outside libraries.
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 204;          // Script version
-integer debug = 2;              // Debugging level, 0 for none
+integer version = 208;          // Script version
+integer debug = 0;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
 string lib_prefix = "Forth Library "; // Library script name prefix
@@ -56,6 +73,7 @@ list rands;                     // Operand (parameter) stack
 list rators;                    // Operator (return, linkage) stack
 integer pc = -1;                // Program counter, indexes "nodes".
 integer compiling;              // Are we compiling or executing?
+integer running;             	// Are we running?
 integer listen_channel = 3;     // Channel to listen for commands
 integer listen_handle;          // Listen handle for further commands
 
@@ -68,14 +86,23 @@ list dict = [
     ";", -51, TRUE              // End word definition
 ];
 
+info(string message) {
+	llOwnerSay((string)llGetLinkNumber() + " " + script + ": " + message);
+}
+
+error(string message) {
+	info("ERROR: " + message);
+}
+
 trace(integer level, string message) {
     if(debug > level)
-        llOwnerSay((string)llGetLinkNumber() + " " + script + ": " + message);
+        info(message);
 }
 
 push_integer(integer i) {
     // See <http://talirosca.wikidot.com/list-optimization> for this idiom.
     // Not yet tested that it works with stacks though!
+    // May not be needed since Mono, but no conclusions yet.  2008-09-02.
     rands = (rands=[]) + [i] + rands;
 }
 
@@ -99,9 +126,9 @@ ret() {
     // trace(1, "ret from pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
     // Safety check: may be able to remove
     if(rators == []) {
-        llOwnerSay("Internal error: empty operator stack!");
-        // dump();
-        pc = -1; // try recovery by interpreting
+        error("Internal error: empty operator stack!");
+        dump();
+        abort();
         return;
     }
     pc = llList2Integer(rators, 0);
@@ -121,40 +148,51 @@ compile_string(string s) {
 }
 
 dump() {
-    llOwnerSay("pc = " + (string)pc);
-    llOwnerSay("rands = " + llDumpList2String(rands, " "));
-    llOwnerSay("rators = " + llDumpList2String(rators, " "));
-    llOwnerSay("words = " + llDumpList2String(words, " "));
-    llOwnerSay("word index = " + (string)word_index);
-    llOwnerSay("segs = " + llDumpList2String(segs, " "));
-    llOwnerSay("seg index = " + (string)seg_index);
-    llOwnerSay("program = " + program);
-    llOwnerSay("program line = " + (string)program_line);
-    llOwnerSay("dict = " + llDumpList2String(dict, " "));
-    llOwnerSay("nodes = " + llDumpList2String(nodes, " "));
-    llOwnerSay("compiling = " + (string)compiling);
-    llOwnerSay((string)llGetFreeMemory() + " bytes free");
+    info("pc = " + (string)pc);
+    info("rands = " + llDumpList2String(rands, " "));
+    info("rators = " + llDumpList2String(rators, " "));
+    info("words = " + llDumpList2String(words, " "));
+    info("word index = " + (string)word_index);
+    info("segs = " + llDumpList2String(segs, " "));
+    info("seg index = " + (string)seg_index);
+    info("program = " + program);
+    info("program line = " + (string)program_line);
+    info("dict = " + llDumpList2String(dict, " "));
+    info("nodes = " + llDumpList2String(nodes, " "));
+    info("compiling = " + (string)compiling);
+    info((string)llGetFreeMemory() + " bytes free");
+}
+
+abort() {
+    segs = [];
+    seg_index = 0;
+    words = [];
+    word_index = 0;
+    program = "";
+    compiling = FALSE;
 }
 
 run() {
+	running = TRUE;
+
     // LSL can't have more than one jump to each label or it ignores the
     // jumps!  Unbelievable.
 @next0; @next1; @next2; @next3; @next4;
-    // trace(1, "step pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
+    // trace(1, "step pc = " + (string)pc + " rators = " + llDumpList2String(rators, "|"));
 
-    if(pc >= 0) {               // Executing compiled code?
+    if(pc >= 0) {                // Executing compiled code?
     @next_op0; @next_op1;
         integer op = llList2Integer(nodes, pc++);
         if(op < 0) {            // Special in-line opcode?
-            if(op == -1) {      // return
+            if(op == -1) {        // return
                 ret();
                 jump next0;
             }
-            if(op == -2) {      // literal integer
+            if(op == -2) {        // literal integer
                 push_integer(llList2Integer(nodes, pc++));
                 jump next_op0;
             }
-            if(op == -3) {      // literal string
+            if(op == -3) {        // literal string
                 push_string(llList2String(nodes, pc++));
                 jump next_op1;
             }
@@ -166,9 +204,12 @@ run() {
         pc = op;
         jump next1;
     }
+    
+    // If pc is -1 then we are returning to the interpreter after making
+    // an immediate call from the compiler.
 
-    if(pc != -1) {              // Built-in or external function
-        if(pc == -50) {         // ":", define word
+    if(pc != -1) {                // Built-in or external function
+        if(pc == -50) {            // ":", define word
             string word = pop_string();
             trace(1, "Defining word " + word);
             dict = (dict=[]) + dict +
@@ -177,7 +218,7 @@ run() {
             ret();
             jump next2;
         }
-        if(pc == -51) {         // ";", end word definition
+        if(pc == -51) {            // ";", end word definition
             compile_integer(-1); // append return opcode
             compiling = FALSE;
             ret();
@@ -186,7 +227,7 @@ run() {
         // External call
         // trace(1, "ecall pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
         llMessageLinked(LINK_THIS, pc, llDumpList2String(rands, "|"), script_key);
-        return;                 // Wait for reply
+        return;                    // Wait for reply
     }
     
 @next_word0; @next_word1;
@@ -196,7 +237,8 @@ run() {
     while(word_index < word_count) {
         string word = llList2String(words, word_index++);
         // Since there is only one string column in dict this won't
-        // accidentally find the wrong things.
+        // accidentally find the wrong things.  TODO: Unless a word is defined
+        // that resembles an integer!
         integer dict_index = llListFindList(dict, [word]);
         if(dict_index != -1) {
             integer entry = llList2Integer(dict, dict_index + 1);
@@ -205,8 +247,8 @@ run() {
                 compile_integer(entry); // compile call
             } else {
                 // trace(1, "icall " + (string)entry);
-                rators = [-1];      // return to interpreting after
-                pc = entry;         // execute the word
+                rators = [-1];        // return to interpreting after
+                pc = entry;            // execute the word
                 jump next4;
             }
         } else if(llSubStringIndex("0123456789", llGetSubString(word, 0, 0)) != -1) {
@@ -216,10 +258,11 @@ run() {
             else
                 push_integer(i);
         } else {
-            llOwnerSay(program + ":" + (string)(program_line - 1) +
-                       ": Unknown word \"" + word + "\".");
+            error(program + ":" + (string)(program_line - 1) +
+                            ": Unknown word \"" + word + "\".");
             dump();
-            return;
+            abort();
+            jump stop;
         }
     }
     
@@ -255,7 +298,7 @@ run() {
         jump next_word0;
     }
 
-    // No segments either.  Is there a notecard to read?  If so ask
+    // No segments either.    Is there a notecard to read?  If so ask
     // for the next line of the program and wait for it to arrive.
     if (program != "") {
         program_query = llGetNotecardLine(program, program_line++);
@@ -264,12 +307,16 @@ run() {
     
     // No program notecard left to read, so listen for further
     // instructions.
-    llOwnerSay("End of program.  Listening on channel " + (string)listen_channel + ".");
-    listen_handle = llListen(listen_channel, "", llGetOwner(), "");
+@stop;
+	running = FALSE;
+    info("Ready.");
 }
 
 run_string(string s) {
-    segs = llParseString2List(s, [], ["\""]);
+    // We must keep the nulls in the string so that there can be empty strings
+    // in Forth.  This can lead to empty word lists, but that does not cause
+    // any real problems.
+    segs = llParseStringKeepNulls(s, [], ["\""]);
     seg_index = 0;
     words = [];
     word_index = 0;
@@ -282,11 +329,6 @@ default {
         trace(0, "Version " + (string)version);
         script_key = llGetInventoryKey(script);
         
-        if(llGetInventoryType(program) != INVENTORY_NOTECARD) {
-            llOwnerSay("No program.");
-            return;
-        }
-
         // Make a list of libraries
         integer n = llGetInventoryNumber(INVENTORY_SCRIPT);
         integer l = llStringLength(lib_prefix);
@@ -312,7 +354,7 @@ default {
         if(lib_index == -1) return;
         string name = llList2String(lib_scripts, lib_index + 1);
         trace(1, "Library \"" + name + "\" registered.");
-        dict = (dict=[]) + dict + llParseString2List(str, ["|"], []);
+        dict = (dict=[]) + dict + llParseStringKeepNulls(str, ["|"], []);
         libs = (libs=[]) + libs + [id, name];
         if(llGetListLength(libs) == llGetListLength(lib_scripts))
             state go;
@@ -322,14 +364,19 @@ default {
 state go {
     state_entry() {
         trace(2, "state go");
-        // llSetTimerEvent(10);
+
+    	listen_handle = llListen(listen_channel, "", llGetOwner(), "");
+		info("Listening on channel " + (string)listen_channel);
+
+        if(llGetInventoryType(program) != INVENTORY_NOTECARD) {
+            error("No program notecard called \"" + program + "\".");
+            abort();
+        } else
+        	info("Running program from notecard \"" + program + "\".");
+
         run();
     }
     
-    //timer() {
-    //    trace(1, "Free memory = " + (string)llGetFreeMemory());
-    //}
-
     dataserver(key queryid, string data) {
         trace(2, "dataserver(" + (string)queryid + ", \"" + data + "\")");
         if(queryid != program_query) return;
@@ -350,19 +397,40 @@ state go {
         trace(2, "listen(" + (string)channel + ", \"" + name + "\", " + (string)id + ", \"" + message + "\")");
         if (channel != listen_channel && id != llGetOwner()) return;
         if (llGetSubString(message, 0, 0) == ":") { // control
-            if (message == ":reset") llResetScript();
-            else if (message == ":dump") dump();
-            else
-                llOwnerSay("ERROR: Unknown control command \"" + message + "\".");
+        	list args = llParseString2List(message, [" "], []);
+        	string command = llList2String(args, 0);
+            if (command == ":reset") {
+            	info("Resetting...");
+            	llResetScript();
+            } else if (command == ":dump") {
+            	dump();
+            } else if (command == ":abort") {
+            	info("Aborting execution...");
+            	abort();
+            } else if (command == ":run") {
+            	if (running)
+            		error("Not ready.");
+            	else {
+					program = llList2String(args, 1);
+					program_line = 0;
+					run();
+				}
+            } else
+                error("Unknown control command \"" + message + "\".");
             return;
         }
+        if (running) {
+			error("Not ready.");
+			return;
+		}
+		info("-> " + message);
         run_string(message);
     }
 
     link_message(integer sender_num, integer num, string str, key id) {
         trace(2, "link_message(" + (string)sender_num + ", " + (string)num + ", \"" + str + "\", " + (string)id + ")");
         if(num != -1) return;
-        rands = llParseString2List(str, ["|"], []);
+        rands = llParseStringKeepNulls(str, ["|"], []);
         ret();
         run();
     }
@@ -374,7 +442,7 @@ state go {
                 llDialog(llGetOwner(),
                          "Forth Interpreter v" + (string)version + "\n" +
                          "Command?",
-                         [":dump", ":reset"],
+                         [":abort", ":dump", ":reset"],
                          listen_channel);
     }
 }
