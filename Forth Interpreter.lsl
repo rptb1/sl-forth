@@ -33,13 +33,7 @@
 //
 // TODO
 // 1. There could be a stack of program notecards and notecard lines, so
-//      that programs could execute each other.  This would be easy to add.
-// 2. The interpreter does not listen for commands until it has finished
-//    compiling the notecards, but it should listen to out-of-band commands
-//    to stop or reset etc.
-// 3. If there is an error compiling the notecard the interpreter just stops
-//    and does not listen for commands.  It has to be reset to fix the
-//    the problem.
+//    that programs could execute each other.  This would be easy to add.
 // 4. The interpreter should perhaps only listen for a limited period when
 //    it is touched, like hippoINVENTORY, to reduce server lag when it is not
 //    in use.
@@ -54,7 +48,7 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 208;          // Script version
+integer version = 209;          // Script version
 integer debug = 0;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
