@@ -4,7 +4,7 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 107;          // Script version
+integer version = 108;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 float timeout = 5.0;            // How long to wait for a response

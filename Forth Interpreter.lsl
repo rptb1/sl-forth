@@ -19,17 +19,24 @@
 // Currently the only flag is "immediate" which means the word
 // will be executed immediately even if in compilation mode.
 //
-// Opcodes >= 0 call into the nodes list.
+// Opcodes > 0 call into the nodes list.
+// Opcode 0 causes an error and is also stored at node 0.  This catches
+// things like returns when there is an empty operand stack.
+//
 // (-99,-1) are reserved for internal operations
 // -1 = return
 // -2 = literal integer
 // -3 = literal string
-// -50 = define word
-// -51 = end word definition
+// -4 = pop rator to rand (return address to stack)
+// -5 = tail call
+//
 // Opcodes <= -100 cause link messages and the interpreter waits
 // for a reply.     The operand stack is packed up in the link message string
 // separated by vertical bars ("|") and the reply should have a number of
 // -1 and a replacement stack similarly packed.     The key is not used.
+//
+// When pc is -1 then we are executing words from a source program or chat
+// input.  Otherwise we are exeucting compiled code in the nodes memory.
 //
 // TODO
 // 1. There could be a stack of program notecards and notecard lines, so
@@ -45,16 +52,30 @@
 //    developers can give away unmodifiable compiled Forth systems.
 // 7. There are no branching or looping structures and these can't be
 //    provided by outside libraries.
+// 8. The small integers could be special small positive opcodes so that they
+//    take up less space.
+// 9. There is probably no need for any immediate words outside the interpreter.
+//    So we can reserve a range of opcodes which are immediate and dispense
+//    with the immediate flag in the dictionary, saving a whole column.
+// 10. Can we spot tail calls?  At run-time we can surely spot that the next
+//     op is a return and jump instead.
 
 string script;                  // Script name
-key script_key;                 // This script's key 
-integer version = 209;          // Script version
-integer debug = 0;              // Debugging level, 0 for none
+key script_key;                 // This script's key
+integer version = 403;          // Script version
+integer debug = 1;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
+integer listen_period = 0;      // How long to listen after a touch.
+integer listen_channel = 3;     // Channel to listen for commands
+
 string lib_prefix = "Forth Library "; // Library script name prefix
 list lib_scripts;               // Potential library scripts
 list libs;                      // Registered library scripts
+
+string config;                  // Configuration notecard name
+key config_query;               // Pending configuration query or NULL_KEY when done
+integer config_line;            // Next configuration notecard line to read
 
 integer program_line;           // Next line to read from notecard
 key program_query;              // Dataserver query for reading line
@@ -62,30 +83,41 @@ list segs;                      // String/non-string segments
 integer seg_index;              // Index of next segment to process
 list words;                     // Words
 integer word_index;             // Index of next word to process
-list nodes;                     // Compiled instructions, index by "dict"
+list nodes = [0];               // Compiled instructions, index by "dict"
 list rands;                     // Operand (parameter) stack
 list rators;                    // Operator (return, linkage) stack
 integer pc = -1;                // Program counter, indexes "nodes".
 integer compiling;              // Are we compiling or executing?
-integer running;             	// Are we running?
-integer listen_channel = 3;     // Channel to listen for commands
-integer listen_handle;          // Listen handle for further commands
+integer running;                // Are we running?
+integer listen_handle = 0;      // Listen handle for further commands
+integer last_op;                // Last compiled operator or -1
 
 // Nucleus dictionary
 // It's possible to make a more primitive nucleus with things like
 // "HERE", "'", ",", etc. in it and define things in terms of that
 // but that's not really the use of this interpreter.
 list dict = [
-    ":", -50, FALSE,            // Define word
-    ";", -51, TRUE              // End word definition
+    "{", -50, TRUE,             // Start block
+    "}", -51, TRUE,             // End block
+    ";", -52, FALSE,            // Define word
+    "!", -54, FALSE,            // Call block
+    "if", -60, FALSE
 ];
 
 info(string message) {
-	llOwnerSay((string)llGetLinkNumber() + " " + script + ": " + message);
+    llOwnerSay((string)llGetLinkNumber() + " " + script + ": " + message);
 }
 
 error(string message) {
-	info("ERROR: " + message);
+    info("ERROR: " + message);
+}
+
+compilation_error(string message) {
+    if(program != "")
+        error(program + ":" + (string)(program_line - 1) +
+                        ": " + message);
+    else
+        error(message);
 }
 
 trace(integer level, string message) {
@@ -94,14 +126,11 @@ trace(integer level, string message) {
 }
 
 push_integer(integer i) {
-    // See <http://talirosca.wikidot.com/list-optimization> for this idiom.
-    // Not yet tested that it works with stacks though!
-    // May not be needed since Mono, but no conclusions yet.  2008-09-02.
-    rands = (rands=[]) + [i] + rands;
+    rands = [i] + rands;
 }
 
 push_string(string s) {
-    rands = (rands=[]) + [s] + rands;
+    rands = [s] + rands;
 }
 
 integer pop_integer() {
@@ -116,38 +145,44 @@ string pop_string() {
     return s;
 }
 
-ret() {
-    // trace(1, "ret from pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
-    // Safety check: may be able to remove
-    if(rators == []) {
-        error("Internal error: empty operator stack!");
-        dump();
-        abort();
-        return;
-    }
-    pc = llList2Integer(rators, 0);
-    rators = llDeleteSubList(rators, 0, 0);
+push_rator(integer i) {
+    rators = [i] + rators;
 }
 
-compile_integer(integer i) {
-    nodes = (nodes=[]) + nodes + [i];
+integer pop_rator() {
+    integer i = llList2Integer(rators, 0);
+    rators = llDeleteSubList(rators, 0, 0);
+    return i;
+}
+
+ret() {
+    // trace(1, "ret from pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
+    // Note: will get zero and signal an error if stack is empty.
+    pc = pop_rator();
+}
+
+compile_op(integer i) {
+    nodes += [i];
+    // If it's a call then remember it so that we can optimise tail calls.
+    if (i > 0 || i <= -100) last_op = i;
 }
 
 compile_list(list l) {
-    nodes = (nodes=[]) + nodes + l;
+    nodes += l;
+    // This is used for literals so we can't optimise tails.
+    last_op = -1;
 }
 
-compile_string(string s) {
-    nodes = (nodes=[]) + nodes + [s];
-}
+
+// dump -- dump virtual machine state
 
 dump() {
     info("pc = " + (string)pc);
-    info("rands = " + llDumpList2String(rands, " "));
-    info("rators = " + llDumpList2String(rators, " "));
+    info("rands = " + llDumpList2String(rands, "|"));
+    info("rators = " + llDumpList2String(rators, "|"));
     info("words = " + llDumpList2String(words, " "));
     info("word index = " + (string)word_index);
-    info("segs = " + llDumpList2String(segs, " "));
+    info("segs = " + llDumpList2String(segs, "|"));
     info("seg index = " + (string)seg_index);
     info("program = " + program);
     info("program line = " + (string)program_line);
@@ -155,7 +190,15 @@ dump() {
     info("nodes = " + llDumpList2String(nodes, " "));
     info("compiling = " + (string)compiling);
     info((string)llGetFreeMemory() + " bytes free");
+    // TODO: Could provide a backtrace by looking up the rators in the
+    // dictionary.
 }
+
+
+// abort -- stop execution
+//
+// Clears the virtual machine state so that the machine will do nothing if run
+// except wait for new input.
 
 abort() {
     segs = [];
@@ -163,112 +206,192 @@ abort() {
     words = [];
     word_index = 0;
     program = "";
+    pc = -1;
     compiling = FALSE;
 }
 
-run() {
-	running = TRUE;
 
-    // LSL can't have more than one jump to each label or it ignores the
-    // jumps!  Unbelievable.
-@next0; @next1; @next2; @next3; @next4;
+// run -- run the virtual machine until it requires an external event
+//
+// The external events that can cause execution to suspend are:
+//   - external call to library, which waits for a link message
+//      (see the link_message hander)
+//   - request the next line from the program notecard
+//     (see the dataserver handler)
+//   - waiting for next interactive line from the chat channel
+//     (see the listen handler)
+// Run-time errors cause the machine to abort and wait for interactive input.
+
+run() {
+    running = TRUE;
+
+@next;
     // trace(1, "step pc = " + (string)pc + " rators = " + llDumpList2String(rators, "|"));
 
     if(pc >= 0) {                // Executing compiled code?
-    @next_op0; @next_op1;
+    @next_op;
         integer op = llList2Integer(nodes, pc++);
-        if(op < 0) {            // Special in-line opcode?
+        if(op <= 0) {            // Special in-line opcode?
             if(op == -1) {        // return
                 ret();
-                jump next0;
+                jump next;
+            }
+            if(op == -5) {      // tail call
+                pc = llList2Integer(nodes, pc++);
+                jump next;
             }
             if(op == -2) {        // literal integer
                 push_integer(llList2Integer(nodes, pc++));
-                jump next_op0;
+                jump next_op;
             }
             if(op == -3) {        // literal string
                 push_string(llList2String(nodes, pc++));
-                jump next_op1;
+                jump next_op;
+            }
+            if(op == -4) {       // rator to rand
+                // Technically this is possible out-of-line but it involves
+                // more list operations.
+                push_integer(pop_rator());
+                jump next_op;
+            }
+            if(op == 0) {       // return from empty stack etc.
+                error("Zero operator fault.");
+                dump();
+                abort();
+                jump stop;
             }
             // Fall through if unrecognized negative op.
         }
-        // Ordinary threaded call
+        // Call the operator
         // trace(1, "call " + (string)op);
-        rators = (rators=[]) + [pc] + rators;
+        push_rator(pc);
         pc = op;
-        jump next1;
+        jump next;
     }
-    
+
     // If pc is -1 then we are returning to the interpreter after making
     // an immediate call from the compiler.
 
     if(pc != -1) {                // Built-in or external function
-        if(pc == -50) {            // ":", define word
+        if(pc == -52) {            // ";", define word
+            integer entry = pop_integer();
             string word = pop_string();
-            trace(1, "Defining word " + word);
-            dict = (dict=[]) + dict +
-                   [word, llGetListLength(nodes), FALSE];
+            // Must forbid words that resemble integers to prevent dictionary
+            // search foul-ups, since there is no strided list search.
+            if(llSubStringIndex("0123456789-", llGetSubString(word, 0, 0)) != -1) {
+                compilation_error("Word may not begin with digit or '-'.");
+                abort();
+                jump stop;
+            }
+            trace(1, "Defining word \"" + word + "\".");
+            dict += [word, entry, FALSE];
+            ret();
+        } else if(pc == -50) {  // "{", start block
+            push_integer(llGetListLength(nodes));   // remember here
+            if (compiling)
+                compile_op(0);     // placeholder for call over block
+            push_integer(compiling);
             compiling = TRUE;
+            last_op = -1;       // No last operator yet!
             ret();
-            jump next2;
-        }
-        if(pc == -51) {            // ";", end word definition
-            compile_integer(-1); // append return opcode
-            compiling = FALSE;
+        } else if(pc == -51) {  // "}", end block
+            if (!compiling) {
+                compilation_error("End of block when not compiling.");
+                abort();
+                jump stop;
+            }
+            if (last_op != -1) {  // tail call possible?
+                nodes = llListInsertList(nodes, [-5], llGetListLength(nodes) - 1);
+                last_op = -1;
+            } else {
+                // Append a ret op to the block contents
+                compile_op(-1);
+            }
+            // Retrieve the start of the block and the previous
+            // compilation state.
+            compiling = pop_integer();
+            integer index = pop_integer();
+            if (compiling) {
+                // Replace the placeholder before the block with a call to
+                // here followed by a R> operation, so that the block entry
+                // point ends up on the stack at run-time.
+                nodes = llListReplaceList(nodes, [llGetListLength(nodes)], index, index);
+                compile_op(-4);
+            } else
+                // Just push the entry point.
+                push_integer(index);
             ret();
-            jump next3;
+        } else if(pc == -54) {  // "!", call block
+            // Replace the current PC with the stack top and do _not_ return.
+            // i.e. tail call the stack top
+            pc = pop_integer();
+        } else if (pc == -60) { // "if"
+            integer b = pop_integer();
+            integer t = pop_integer();
+            integer f = pop_integer();
+            if (b)
+                pc = t;
+            else
+                pc = f;
+            // Tail call
+        } else {
+            // External call
+            // trace(1, "ecall pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
+            llMessageLinked(LINK_THIS, pc, llDumpList2String(rands, "|"), script_key);
+            return;                    // Wait for reply
         }
-        // External call
-        // trace(1, "ecall pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
-        llMessageLinked(LINK_THIS, pc, llDumpList2String(rands, "|"), script_key);
-        return;                    // Wait for reply
+        jump next;
     }
-    
-@next_word0; @next_word1;
+
+@next_word;
 
     // Interpret words until they are exhausted.
     integer word_count = llGetListLength(words);
     while(word_index < word_count) {
         string word = llList2String(words, word_index++);
-        // Since there is only one string column in dict this won't
-        // accidentally find the wrong things.  TODO: Unless a word is defined
-        // that resembles an integer!
-        integer dict_index = llListFindList(dict, [word]);
-        if(dict_index != -1) {
-            integer entry = llList2Integer(dict, dict_index + 1);
-            integer immediate = llList2Integer(dict, dict_index + 2);
-            if(!immediate && compiling) {
-                compile_integer(entry); // compile call
-            } else {
-                // trace(1, "icall " + (string)entry);
-                rators = [-1];        // return to interpreting after
-                pc = entry;            // execute the word
-                jump next4;
-            }
-        } else if(llSubStringIndex("0123456789", llGetSubString(word, 0, 0)) != -1) {
+        if(llSubStringIndex("0123456789", llGetSubString(word, 0, 0)) != -1) {
             integer i = (integer)word;
             if(compiling)
                 compile_list([-2, i]); // literal integer
             else
                 push_integer(i);
         } else {
-            error(program + ":" + (string)(program_line - 1) +
-                            ": Unknown word \"" + word + "\".");
-            dump();
-            abort();
-            jump stop;
+            // Since there is only one string column in dict this won't
+            // accidentally find the wrong things.  Words are checked so that
+            // they can't resemble integers.
+            integer dict_index = llListFindList(dict, [word]);
+            if(dict_index != -1) {
+                integer entry = llList2Integer(dict, dict_index + 1);
+                integer immediate = llList2Integer(dict, dict_index + 2);
+                if(!immediate && compiling) {
+                    compile_op(entry); // compile call
+                } else {
+                    // trace(1, "icall " + (string)entry);
+                    rators = [-1];        // return to interpreting after
+                    pc = entry;            // execute the word
+                    jump next;
+                }
+            } else {
+                compilation_error("Unknown word \"" + word + "\".");
+                // dump();
+                abort();
+                jump stop;
+            }
         }
     }
-    
+
     // Ran out of words, interpret next segment.
     // Are there segments available to interpret?
     if(seg_index < llGetListLength(segs)) {
         // Is the next segment a string?
-        // TODO: deal with empty string
         // TODO: deal with embedded quotes
         if(llList2String(segs, seg_index) == "\"") {
             ++seg_index;
             string seg = llList2String(segs, seg_index++);
+            if(seg == "\"") {       // empty string
+                seg = "";
+                --seg_index;
+            }
             if(compiling)
                 compile_list([-3, seg]); // literal string
             else
@@ -285,11 +408,9 @@ run() {
         // result will be an empty list of words and another
         // iteration of the while loop, so there's no need to waste
         // space checking for it.
-        words = llParseString2List(llList2String(segs, seg_index++),
-                                   [" "],
-                                   []);
+        words = llParseString2List(llList2String(segs, seg_index++), [" "], []);
         word_index = 0;
-        jump next_word0;
+        jump next_word;
     }
 
     // No segments either.    Is there a notecard to read?  If so ask
@@ -298,11 +419,11 @@ run() {
         program_query = llGetNotecardLine(program, program_line++);
         return;
     }
-    
+
     // No program notecard left to read, so listen for further
     // instructions.
 @stop;
-	running = FALSE;
+    running = FALSE;
     info("Ready.");
 }
 
@@ -317,12 +438,34 @@ run_string(string s) {
     run();
 }
 
+integer setup_done() {
+    return config_query == NULL_KEY &&
+           llGetListLength(libs) == llGetListLength(lib_scripts);
+}
+
+listen_timeout() {
+    if (listen_period > 0) {
+        llSetTimerEvent(listen_period);
+        info("Listening on channel " + (string)listen_channel +
+              " for " + (string)listen_period + " seconds.");
+    } else
+        info("Listening on channel " + (string)listen_channel + ".");
+}
+
 default {
     state_entry() {
         script = llGetScriptName();
         trace(0, "Version " + (string)version);
         script_key = llGetInventoryKey(script);
-        
+
+        // Read the configuration notecard if there is one to override
+        // any of the settings.
+        config = script + " config";
+        if(llGetInventoryType(config) == INVENTORY_NOTECARD) {
+            trace(1, "Reading from notecard \"" + config + "\".");
+            config_query = llGetNotecardLine(config, config_line++);
+        }
+
         // Make a list of libraries
         integer n = llGetInventoryNumber(INVENTORY_SCRIPT);
         integer l = llStringLength(lib_prefix);
@@ -331,16 +474,16 @@ default {
             string name = llGetInventoryName(INVENTORY_SCRIPT, i);
             if(llGetSubString(name, 0, l - 1) == lib_prefix) {
                 key lib_key = llGetInventoryKey(name);
-                lib_scripts = (lib_scripts=[]) + lib_scripts + [lib_key, name];
+                lib_scripts += [lib_key, name];
             }
         }
-        
+
         trace(1, "Found libraries " + llDumpList2String(lib_scripts, " "));
 
         // Request dictionary entry registration
         llMessageLinked(LINK_THIS, -2, "", script_key);
     }
-    
+
     link_message(integer sender_num, integer num, string str, key id) {
         trace(2, "link_message(" + (string)sender_num + ", " + (string)num + ", \"" + str + "\", " + (string)id + ")");
         if(num != -3) return;
@@ -348,10 +491,43 @@ default {
         if(lib_index == -1) return;
         string name = llList2String(lib_scripts, lib_index + 1);
         trace(1, "Library \"" + name + "\" registered.");
-        dict = (dict=[]) + dict + llParseStringKeepNulls(str, ["|"], []);
-        libs = (libs=[]) + libs + [id, name];
-        if(llGetListLength(libs) == llGetListLength(lib_scripts))
-            state go;
+        dict += llParseStringKeepNulls(str, ["|"], []);
+        libs += [id, name];
+        if (setup_done()) state go;
+    }
+
+    // This is just used for getting the information from the config notecard.
+    // Programs are run from notecards in the "running" state.
+    dataserver(key query, string data) {
+        trace(2, "dataserver(" + (string)query + ", \"" + data + "\")");
+        if (query != config_query) {
+            trace(3, "Ignoring unexpected dataserver response " + (string)query);
+            return;
+        }
+        if(data == EOF) {
+            config_query = NULL_KEY;
+            if (setup_done()) state go;
+            return;
+        }
+        config_query = llGetNotecardLine(config, config_line++);
+        data = llStringTrim(data, STRING_TRIM);
+        if(llGetSubString(data, 0, 0) == "#") return; // comment
+        integer index = llSubStringIndex(data, "=");
+        if(index < 1) return;
+        string var = llStringTrim(llGetSubString(data, 0, index - 1), STRING_TRIM_TAIL);
+        string val = llStringTrim(llGetSubString(data, index + 1, -1), STRING_TRIM_HEAD);
+        trace(3, "var = \"" + var + "\" val = \"" + val + "\"");
+        if (var == "" || val == "") return;
+        if (var == "program")
+            program = val;
+        else if (var == "debug")
+            debug = (integer)val;
+        else if (var == "listen_channel")
+            listen_channel = (integer)val;
+        else if (var == "listen_period")
+            listen_period = (integer)val;
+        else
+            llOwnerSay("Ignoring unknown setting for \"" + var + "\".");
     }
 }
 
@@ -359,24 +535,42 @@ state go {
     state_entry() {
         trace(2, "state go");
 
-    	listen_handle = llListen(listen_channel, "", llGetOwner(), "");
-		info("Listening on channel " + (string)listen_channel);
+        if (listen_channel >= 0) {
+            listen_handle = llListen(listen_channel, "", llGetOwner(), "");
+            listen_timeout();
+        }
 
         if(llGetInventoryType(program) != INVENTORY_NOTECARD) {
             error("No program notecard called \"" + program + "\".");
             abort();
         } else
-        	info("Running program from notecard \"" + program + "\".");
+            info("Running program from notecard \"" + program + "\".");
 
         run();
     }
-    
+
+    touch_start(integer num_detected) {
+        if (listen_handle != 0) {
+            integer i;
+            for (i = 0; i < num_detected; ++i)
+                if (llDetectedKey(i) == llGetOwner()) {
+                    llListenControl(listen_handle, TRUE);
+                    listen_timeout();
+                }
+        }
+    }
+
+    timer() {
+        llSetTimerEvent(0);
+        llListenControl(listen_handle, FALSE);
+    }
+
     dataserver(key queryid, string data) {
         trace(2, "dataserver(" + (string)queryid + ", \"" + data + "\")");
         if(queryid != program_query) return;
         if(data == EOF) {
             program = "";
-            run();
+            run(); // TODO: Is this necessary?
             return;
         }
         data = llStringTrim(data, STRING_TRIM);
@@ -386,57 +580,49 @@ state go {
         }
         run_string(data);
     }
-    
+
     listen(integer channel, string name, key id, string message) {
-        trace(2, "listen(" + (string)channel + ", \"" + name + "\", " + (string)id + ", \"" + message + "\")");
+        trace(2, "listen(" + (string)channel + ", \"" + name + "\", " +
+                 (string)id + ", \"" + message + "\")");
         if (channel != listen_channel && id != llGetOwner()) return;
         if (llGetSubString(message, 0, 0) == ":") { // control
-        	list args = llParseString2List(message, [" "], []);
-        	string command = llList2String(args, 0);
+            list args = llParseString2List(message, [" "], []);
+            string command = llList2String(args, 0);
             if (command == ":reset") {
-            	info("Resetting...");
-            	llResetScript();
+                info("Resetting...");
+                llResetScript();
             } else if (command == ":dump") {
-            	dump();
+                dump();
             } else if (command == ":abort") {
-            	info("Aborting execution...");
-            	abort();
+                info("Aborting execution...");
+                abort();
             } else if (command == ":run") {
-            	if (running)
-            		error("Not ready.");
-            	else {
-					program = llList2String(args, 1);
-					program_line = 0;
-					run();
-				}
+                if (running)
+                    error("Not ready.");
+                else {
+                    program = llList2String(args, 1);
+                    program_line = 0;
+                    info("Running notecard \"" + program + "\".");
+                    run();
+                }
             } else
                 error("Unknown control command \"" + message + "\".");
             return;
         }
         if (running) {
-			error("Not ready.");
-			return;
-		}
-		info("-> " + message);
+            error("Not ready.");
+            return;
+        }
+        info("-> " + message);
         run_string(message);
     }
 
     link_message(integer sender_num, integer num, string str, key id) {
-        trace(2, "link_message(" + (string)sender_num + ", " + (string)num + ", \"" + str + "\", " + (string)id + ")");
+        trace(2, "link_message(" + (string)sender_num + ", " +
+                 (string)num + ", \"" + str + "\", " + (string)id + ")");
         if(num != -1) return;
         rands = llParseStringKeepNulls(str, ["|"], []);
         ret();
         run();
-    }
-    
-    touch_start(integer num_detected) {
-        integer i;
-        for (i = 0; i < num_detected; ++i)
-            if (llDetectedKey(i) == llGetOwner())
-                llDialog(llGetOwner(),
-                         "Forth Interpreter v" + (string)version + "\n" +
-                         "Command?",
-                         [":abort", ":dump", ":reset"],
-                         listen_channel);
     }
 }

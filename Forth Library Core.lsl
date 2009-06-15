@@ -17,6 +17,7 @@ list dict = [
     "-", -1001, FALSE,
     "*", -1002, FALSE,
     "/", -1003, FALSE,
+    "=", -1004, FALSE,
     ".", -1100, FALSE,
     "drop", -1200, FALSE,
     "dup", -1201, FALSE,
@@ -84,6 +85,10 @@ default {
             integer y = pop_integer();
             integer x = pop_integer();
             push_integer(x / y);
+        } else if(num == -1004) { // =
+            string y = pop_string();
+            string x = pop_string();
+            push_integer(x == y);
         } else if(num == -1100) // .
             print_stack();
         else if(num == -1200)   // drop

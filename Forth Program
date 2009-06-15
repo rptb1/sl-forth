@@ -1,0 +1,5 @@
+"fact" {
+    { dup 1 - fact * }
+    { 1 }
+    dup 0 = if
+} ;
