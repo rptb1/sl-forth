@@ -59,17 +59,14 @@
 // 9. There is probably no need for any immediate words outside the interpreter.
 //    So we can reserve a range of opcodes which are immediate and dispense
 //    with the immediate flag in the dictionary, saving a whole column.
-// 10. Can we spot tail calls?  At run-time we can surely spot that the next
-//     op is a return and jump instead.
 // 11. Create a UUID to attach to all messages to distinguish Forth messages
 //     from others.
 // 12. Should refresh listen timeout at Ready prompt after result that came from
 //     listening.
-// 13. "! }" should tail!
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 405;          // Script version
+integer version = 407;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
@@ -98,6 +95,7 @@ integer compiling;              // Are we compiling or executing?
 integer running;                // Are we running?
 integer listen_handle = 0;      // Listen handle for further commands
 integer last_op;                // Last compiled operator or -1
+integer tracing = 2;            // Tracing level
 
 // Nucleus dictionary
 // It's possible to make a more primitive nucleus with things like
@@ -131,6 +129,17 @@ compilation_error(string message) {
 trace(integer level, string message) {
     if(debug > level)
         info(message);
+}
+
+pos(string prefix) {
+    integer dict_index = llListFindList(dict, [pc]);
+    string word = "?";
+    if (dict_index != -1)
+        word = llList2String(dict, dict_index - 1);
+    info(prefix + " " +
+         llDumpList2String(rands, "|") + "||" +
+         word + " " + (string)pc + " " +
+         llDumpList2String(rators, " "));
 }
 
 integer is_digit(string s) {
@@ -184,7 +193,9 @@ ret() {
 compile_op(integer i) {
     nodes += [i];
     // If it's a call then remember it so that we can optimise tail calls.
-    if (i > 0 || i <= -100) last_op = i;
+    // We're allowed to tail to the nucleus dictionary too, so things like
+    // "if" and "!" can be tailed-to.
+    if (i > 0 || i <= -50) last_op = i;
 }
 
 compile_list(list l) {
@@ -253,11 +264,13 @@ run() {
         integer op = llList2Integer(nodes, pc++);
         if(op <= 0) {            // Special in-line opcode?
             if(op == -1) {        // return
+                if (tracing >= 2) pos("ret");
                 ret();
                 jump next;
             }
             if(op == -5) {      // tail call
                 pc = llList2Integer(nodes, pc++);
+                if (tracing >= 1) pos("tail");
                 jump next;
             }
             if(op == -2) {        // literal integer
@@ -286,6 +299,7 @@ run() {
         // trace(1, "call " + (string)op);
         push_rator(pc);
         pc = op;
+        if (tracing >= 1) pos("call");
         jump next;
     }
 
