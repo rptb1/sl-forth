@@ -1,5 +1,5 @@
 # Forth Interpreter Configuration
 # program = Forth Program
 # debug = 0
-listen_channel = 5
-# listen_period = 30
+# listen_channel = 3
+# listen_period = 0

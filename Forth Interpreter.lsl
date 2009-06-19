@@ -8,9 +8,9 @@
 // <http://en.wikipedia.org/wiki/Forth_(programming_language)>.
 //
 // Each line of the program is split into "segments" delimited by double
-// quotes.    Alternate segments are words to be interpreted, and strings
+// quotes.  Alternate segments are words to be interpreted, and strings
 // to be pushed on to the stack.  The word segments are split into words
-// delimeted by spaces.     Words that start with digits are assumed to be
+// delimeted by spaces.  Words that start with digits are assumed to be
 // integers (any trailing junk is discarded) to be pushed on to the stack.
 // Other words are looked up in the dictionary and either executed or
 // compiled, depending on the current mode.
@@ -31,9 +31,9 @@
 // -5 = tail call
 //
 // Opcodes <= -100 cause link messages and the interpreter waits
-// for a reply.     The operand stack is packed up in the link message string
+// for a reply.  The operand stack is packed up in the link message string
 // separated by vertical bars ("|") and the reply should have a number of
-// -1 and a replacement stack similarly packed.     The key is not used.
+// -1 and a replacement stack similarly packed.  The key is not used.
 //
 // When pc is -1 then we are executing words from a source program or chat
 // input.  Otherwise we are exeucting compiled code in the nodes memory.
@@ -59,10 +59,16 @@
 //    with the immediate flag in the dictionary, saving a whole column.
 // 10. Can we spot tail calls?  At run-time we can surely spot that the next
 //     op is a return and jump instead.
+// 11. Create a UUID to attach to all messages to distinguish Forth messages
+//     from others.
+// 12. The dictionary could be dropped at the end of compilation, perhaps
+//     preserving a single word.  It could also be maintained in a separate
+//     script, to save memory.  Or, the compiler and interpreter could be
+//     in separate scripts.
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 403;          // Script version
+integer version = 404;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
@@ -349,7 +355,7 @@ run() {
     integer word_count = llGetListLength(words);
     while(word_index < word_count) {
         string word = llList2String(words, word_index++);
-        if(llSubStringIndex("0123456789", llGetSubString(word, 0, 0)) != -1) {
+        if(llSubStringIndex("0123456789-", llGetSubString(word, 0, 0)) != -1) {
             integer i = (integer)word;
             if(compiling)
                 compile_list([-2, i]); // literal integer
@@ -413,7 +419,7 @@ run() {
         jump next_word;
     }
 
-    // No segments either.    Is there a notecard to read?  If so ask
+    // No segments either.  Is there a notecard to read?  If so ask
     // for the next line of the program and wait for it to arrive.
     if (program != "") {
         program_query = llGetNotecardLine(program, program_line++);
@@ -465,6 +471,9 @@ default {
             trace(1, "Reading from notecard \"" + config + "\".");
             config_query = llGetNotecardLine(config, config_line++);
         }
+        
+        // TODO: Should transition to new state here only when configuration
+        // is complete, so that config can change things like lib_prefix.
 
         // Make a list of libraries
         integer n = llGetInventoryNumber(INVENTORY_SCRIPT);

@@ -7,7 +7,7 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 202;          // Script version
+integer version = 203;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 list rands;                     // Operand stack
@@ -17,13 +17,12 @@ list dict = [
     "-", -1001, FALSE,
     "*", -1002, FALSE,
     "/", -1003, FALSE,
-    "=", -1004, FALSE,
     ".", -1100, FALSE,
     "drop", -1200, FALSE,
     "dup", -1201, FALSE,
     "swap", -1202, FALSE,
     "over", -1203, FALSE,
-    "2dup", -1204, FALSE,
+    "dup2", -1204, FALSE,
     "pick", -1205, FALSE,
     "append", -1300, FALSE
 ];
@@ -85,10 +84,6 @@ default {
             integer y = pop_integer();
             integer x = pop_integer();
             push_integer(x / y);
-        } else if(num == -1004) { // =
-            string y = pop_string();
-            string x = pop_string();
-            push_integer(x == y);
         } else if(num == -1100) // .
             print_stack();
         else if(num == -1200)   // drop
