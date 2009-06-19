@@ -24,11 +24,13 @@
 // things like returns when there is an empty operand stack.
 //
 // (-99,-1) are reserved for internal operations
+// (-49, -1) are special in-line codes
 // -1 = return
 // -2 = literal integer
 // -3 = literal string
 // -4 = pop rator to rand (return address to stack)
 // -5 = tail call
+// (-99, -50) are built-in operators (see nucelus dictionary below)
 //
 // Opcodes <= -100 cause link messages and the interpreter waits
 // for a reply.  The operand stack is packed up in the link message string
@@ -61,14 +63,13 @@
 //     op is a return and jump instead.
 // 11. Create a UUID to attach to all messages to distinguish Forth messages
 //     from others.
-// 12. The dictionary could be dropped at the end of compilation, perhaps
-//     preserving a single word.  It could also be maintained in a separate
-//     script, to save memory.  Or, the compiler and interpreter could be
-//     in separate scripts.
+// 12. Should refresh listen timeout at Ready prompt after result that came from
+//     listening.
+// 13. "! }" should tail!
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 404;          // Script version
+integer version = 405;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
@@ -107,6 +108,7 @@ list dict = [
     "}", -51, TRUE,             // End block
     ";", -52, FALSE,            // Define word
     "!", -54, FALSE,            // Call block
+    "recursive", -55, FALSE,    // Fixed point operator
     "if", -60, FALSE
 ];
 
@@ -129,6 +131,18 @@ compilation_error(string message) {
 trace(integer level, string message) {
     if(debug > level)
         info(message);
+}
+
+integer is_digit(string s) {
+    return llSubStringIndex("0123456789", s) != -1;
+}
+
+integer is_integer(string s) {
+    integer l = llStringLength(s);
+    return (l == 1 && is_digit(s)) ||
+           (l > 1 &&
+            llGetSubString(s, 0, 0) == "-" &&
+            is_digit(llGetSubString(s, 1, 1)));
 }
 
 push_integer(integer i) {
@@ -284,7 +298,7 @@ run() {
             string word = pop_string();
             // Must forbid words that resemble integers to prevent dictionary
             // search foul-ups, since there is no strided list search.
-            if(llSubStringIndex("0123456789-", llGetSubString(word, 0, 0)) != -1) {
+            if(is_integer(word)) {
                 compilation_error("Word may not begin with digit or '-'.");
                 abort();
                 jump stop;
@@ -331,6 +345,15 @@ run() {
             // Replace the current PC with the stack top and do _not_ return.
             // i.e. tail call the stack top
             pc = pop_integer();
+        } else if (pc == -55) { // "recursive" fixed point operator
+            // Compile a new operator which, when called, pushes itself onto
+            // the stack and tails to its argument, and is thus the fixed
+            // point of its argument.
+            integer index = llGetListLength(nodes);
+            compile_list([-2, index,
+                          -5, pop_integer()]);
+            push_integer(index);
+            ret();
         } else if (pc == -60) { // "if"
             integer b = pop_integer();
             integer t = pop_integer();
@@ -355,7 +378,7 @@ run() {
     integer word_count = llGetListLength(words);
     while(word_index < word_count) {
         string word = llList2String(words, word_index++);
-        if(llSubStringIndex("0123456789-", llGetSubString(word, 0, 0)) != -1) {
+        if (is_integer(word)) {
             integer i = (integer)word;
             if(compiling)
                 compile_list([-2, i]); // literal integer
