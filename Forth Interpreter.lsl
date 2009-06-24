@@ -42,17 +42,9 @@
 // TODO
 // 1. There could be a stack of program notecards and notecard lines, so
 //    that programs could execute each other.  This would be easy to add.
-// 4. The interpreter should perhaps only listen for a limited period when
-//    it is touched, like hippoINVENTORY, to reduce server lag when it is not
-//    in use.
-// 5. The listen channel and other options should be configurable via a
-//    notecard in case the interpreter is given away without permission to
-//    alter it.
 // 6. There should perhaps be a way of dumping the compiled nodes and
 //    dictionary to a script which could also be protected so that Forth
 //    developers can give away unmodifiable compiled Forth systems.
-// 7. There are no branching or looping structures and these can't be
-//    provided by outside libraries.
 // 8. The small integers could be special small positive opcodes so that they
 //    take up less space.
 // 11. Create a UUID to attach to all messages to distinguish Forth messages
@@ -62,7 +54,7 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 500;          // Script version
+integer version = 501;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
@@ -91,7 +83,7 @@ integer compiling;              // Are we compiling or executing?
 integer running;                // Are we running?
 integer listen_handle = 0;      // Listen handle for further commands
 integer last_op;                // Last compiled operator or -1
-integer tracing = 2;            // Tracing level
+integer tracing = 0;            // Tracing level
 
 // Nucleus dictionary
 // It's possible to make a more primitive nucleus with things like
@@ -102,7 +94,7 @@ list dict = [
     "}", -51,                   // End block
     ";", -70,                   // Define word
     "!", -71,                   // Call block
-    "recursive", -72            // Fixed point operator
+    "recursive", -72,           // Fixed point operator
     "if", -80
 ];
 
@@ -365,9 +357,9 @@ run() {
             push_integer(index);
             ret();
         } else if (pc == -80) { // "if"
-            integer b = pop_integer();
-            integer t = pop_integer();
             integer f = pop_integer();
+            integer t = pop_integer();
+            integer b = pop_integer();
             if (b)
                 pc = t;
             else
