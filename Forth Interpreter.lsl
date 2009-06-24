@@ -15,9 +15,7 @@
 // Other words are looked up in the dictionary and either executed or
 // compiled, depending on the current mode.
 //
-// Dictionary is a list of triples: name, entry point, flags
-// Currently the only flag is "immediate" which means the word
-// will be executed immediately even if in compilation mode.
+// Dictionary is a list of pairs: name, entry point.
 //
 // Opcodes > 0 call into the nodes list.
 // Opcode 0 causes an error and is also stored at node 0.  This catches
@@ -31,6 +29,7 @@
 // -4 = pop rator to rand (return address to stack)
 // -5 = tail call
 // (-99, -50) are built-in operators (see nucelus dictionary below)
+// (-69, -50) are immediate (executed during compilation)
 //
 // Opcodes <= -100 cause link messages and the interpreter waits
 // for a reply.  The operand stack is packed up in the link message string
@@ -56,9 +55,6 @@
 //    provided by outside libraries.
 // 8. The small integers could be special small positive opcodes so that they
 //    take up less space.
-// 9. There is probably no need for any immediate words outside the interpreter.
-//    So we can reserve a range of opcodes which are immediate and dispense
-//    with the immediate flag in the dictionary, saving a whole column.
 // 11. Create a UUID to attach to all messages to distinguish Forth messages
 //     from others.
 // 12. Should refresh listen timeout at Ready prompt after result that came from
@@ -66,7 +62,7 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 407;          // Script version
+integer version = 500;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 string program = "Forth Program"; // Program notecard name or empty for none.
@@ -102,12 +98,12 @@ integer tracing = 2;            // Tracing level
 // "HERE", "'", ",", etc. in it and define things in terms of that
 // but that's not really the use of this interpreter.
 list dict = [
-    "{", -50, TRUE,             // Start block
-    "}", -51, TRUE,             // End block
-    ";", -52, FALSE,            // Define word
-    "!", -54, FALSE,            // Call block
-    "recursive", -55, FALSE,    // Fixed point operator
-    "if", -60, FALSE
+    "{", -50,                   // Start block
+    "}", -51,                   // End block
+    ";", -70,                   // Define word
+    "!", -71,                   // Call block
+    "recursive", -72            // Fixed point operator
+    "if", -80
 ];
 
 info(string message) {
@@ -307,18 +303,18 @@ run() {
     // an immediate call from the compiler.
 
     if(pc != -1) {                // Built-in or external function
-        if(pc == -52) {            // ";", define word
+        if(pc == -70) {            // ";", define word
             integer entry = pop_integer();
             string word = pop_string();
             // Must forbid words that resemble integers to prevent dictionary
             // search foul-ups, since there is no strided list search.
             if(is_integer(word)) {
-                compilation_error("Word may not begin with digit or '-'.");
+                compilation_error("Word may not resemble a number.");
                 abort();
                 jump stop;
             }
             trace(1, "Defining word \"" + word + "\".");
-            dict += [word, entry, FALSE];
+            dict += [word, entry];
             ret();
         } else if(pc == -50) {  // "{", start block
             push_integer(llGetListLength(nodes));   // remember here
@@ -355,11 +351,11 @@ run() {
                 // Just push the entry point.
                 push_integer(index);
             ret();
-        } else if(pc == -54) {  // "!", call block
+        } else if(pc == -71) {  // "!", call block
             // Replace the current PC with the stack top and do _not_ return.
             // i.e. tail call the stack top
             pc = pop_integer();
-        } else if (pc == -55) { // "recursive" fixed point operator
+        } else if (pc == -72) { // "recursive" fixed point operator
             // Compile a new operator which, when called, pushes itself onto
             // the stack and tails to its argument, and is thus the fixed
             // point of its argument.
@@ -368,7 +364,7 @@ run() {
                           -5, pop_integer()]);
             push_integer(index);
             ret();
-        } else if (pc == -60) { // "if"
+        } else if (pc == -80) { // "if"
             integer b = pop_integer();
             integer t = pop_integer();
             integer f = pop_integer();
@@ -405,7 +401,7 @@ run() {
             integer dict_index = llListFindList(dict, [word]);
             if(dict_index != -1) {
                 integer entry = llList2Integer(dict, dict_index + 1);
-                integer immediate = llList2Integer(dict, dict_index + 2);
+                integer immediate = -70 < entry && entry <= -50;
                 if(!immediate && compiling) {
                     compile_op(entry); // compile call
                 } else {
