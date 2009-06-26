@@ -7,24 +7,31 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 203;          // Script version
+integer version = 207;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
+
+// This string contains Unicode character U+E000 from the Private Use Area
+// and is used to separate strings with llDumpList2String since it is very
+// unlikely to be used in anything that appears in the list.
+string dump_separator = "";
 
 list rands;                     // Operand stack
 
 list dict = [
-    "+", -1000, FALSE,
-    "-", -1001, FALSE,
-    "*", -1002, FALSE,
-    "/", -1003, FALSE,
-    ".", -1100, FALSE,
-    "drop", -1200, FALSE,
-    "dup", -1201, FALSE,
-    "swap", -1202, FALSE,
-    "over", -1203, FALSE,
-    "dup2", -1204, FALSE,
-    "pick", -1205, FALSE,
-    "append", -1300, FALSE
+    "+", -1000,
+    "-", -1001,
+    "*", -1002,
+    "/", -1003,
+    "=", -1004,
+    ".", -1100,
+    "drop", -1200,
+    "dup", -1201,
+    "swap", -1202,
+    "over", -1203,
+    "2dup", -1204,
+    "pick", -1205,
+    "rot", -1206,
+    "append", -1300
 ];
 
 trace(integer level, string message) {
@@ -52,9 +59,58 @@ string pop_string() {
     return s;
 }
 
-print_stack() {
-    llOwnerSay(llDumpList2String(rands, " "));
+// This function is duplicated in the "Forth VM" script.
+integer builtin(integer num) {
+    if(num == -1000)        // +
+        push_integer(pop_integer() + pop_integer());
+    else if(num == -1001) { // -
+        integer y = pop_integer();
+        integer x = pop_integer();
+        push_integer(x - y);
+    } else if(num == -1002) // *
+        push_integer(pop_integer() * pop_integer());
+    else if(num == -1003) { // /
+        integer y = pop_integer();
+        integer x = pop_integer();
+        push_integer(x / y);
+    } else if(num == -1004) { // =
+        string y = pop_string();
+        string x = pop_string();
+        push_integer(x == y);
+    } else if(num == -1100) // .
+        llOwnerSay(llDumpList2String(rands, " "));
+    else if(num == -1200)   // drop
+        pop_string();
+    else if(num == -1201) { // dup
+        push_string(llList2String(rands, 0));
+    } else if(num == -1202) { // swap
+        string y = pop_string();
+        string x = pop_string();
+        push_string(y);
+        push_string(x);
+    } else if(num == -1203) { // over
+        push_string(llList2String(rands, 1));
+    } else if(num == -1204) { // 2dup
+        rands = (rands=[]) + llList2List(rands, 0, 1) + rands;
+    } else if(num == -1205) { // pick
+        integer i = pop_integer();
+        push_string(llList2String(rands, i));
+    } else if(num == -1206) { // rot
+        integer i = pop_integer();
+        integer j = pop_integer();
+        integer k = pop_integer();
+        push_integer(j);
+        push_integer(i);
+        push_integer(k);
+    } else if(num == -1300) { // append
+        string y = pop_string();
+        string x = pop_string();
+        push_string(x + y);
+    } else
+        return FALSE;
+    return TRUE;
 }
+
 
 default {
     state_entry() {
@@ -65,51 +121,22 @@ default {
 
     link_message(integer sender_num, integer num, string str, key id) {
         trace(2, "link_message(" + (string)sender_num + ", " + (string)num + ", \"" + str + "\", " + (string)id + ")");
-        if(num == -2) {         // Dictionary registration
-            llMessageLinked(LINK_THIS, -3, llDumpList2String(dict, "|"), script_key);
+
+        if(num == 0x51a20030) {         // Dictionary registration
+            llMessageLinked(LINK_THIS,
+                            0x51a20031,
+                            llDumpList2String(dict, dump_separator),
+                            script_key);
             return;
         }
-        // Unpack the operand stack.
-        rands = llParseStringKeepNulls(str, ["|"], []);
 
-        if(num == -1000)        // +
-            push_integer(pop_integer() + pop_integer());
-        else if(num == -1001) { // -
-            integer y = pop_integer();
-            integer x = pop_integer();
-            push_integer(x - y);
-        } else if(num == -1002) // *
-            push_integer(pop_integer() * pop_integer());
-        else if(num == -1003) { // /
-            integer y = pop_integer();
-            integer x = pop_integer();
-            push_integer(x / y);
-        } else if(num == -1100) // .
-            print_stack();
-        else if(num == -1200)   // drop
-            pop_string();
-        else if(num == -1201) { // dup
-            push_string(llList2String(rands, 0));
-        } else if(num == -1202) { // swap
-            string y = pop_string();
-            string x = pop_string();
-            push_string(y);
-            push_string(x);
-        } else if(num == -1203) { // over
-            push_string(llList2String(rands, 1));
-        } else if(num == -1204) { // 2dup
-            rands = (rands=[]) + llList2List(rands, 0, 1) + rands;
-        } else if(num == -1205) { // pick
-            integer i = pop_integer();
-            push_string(llList2String(rands, i));
-        } else if(num == -1300) { // append
-            string y = pop_string();
-            string x = pop_string();
-            push_string(x + y);
-        } else
-            return;             // Unrecognized -- ignore
-            
-        // Send back the results
-        llMessageLinked(sender_num, -1, llDumpList2String(rands, "|"), script_key);
+        // Unpack the operand stack.
+        rands = llParseStringKeepNulls(str, [dump_separator], []);
+        
+        if (builtin(num))
+            llMessageLinked(sender_num,
+                            0x51a20011,
+                            llDumpList2String(rands, dump_separator),
+                            id);
     }
 }

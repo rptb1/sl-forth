@@ -54,8 +54,13 @@
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 501;          // Script version
-integer debug = 1;              // Debugging level, 0 for none
+integer version = 600;          // Script version
+integer debug = 2;              // Debugging level, 0 for none
+
+// This string contains Unicode character U+E000 from the Private Use Area
+// and is used to separate strings with llDumpList2String since it is very
+// unlikely to be used in anything that appears in the list.
+string dump_separator = "";
 
 string program = "Forth Program"; // Program notecard name or empty for none.
 integer listen_period = 0;      // How long to listen after a touch.
@@ -75,7 +80,9 @@ list segs;                      // String/non-string segments
 integer seg_index;              // Index of next segment to process
 list words;                     // Words
 integer word_index;             // Index of next word to process
-list nodes = [0];               // Compiled instructions, index by "dict"
+list nodes= [];                 // Compiled instructions to be sent to VM later
+integer there = 1;              // Index of first compiled node
+integer here = 1;               // Index of next compiled node
 list rands;                     // Operand (parameter) stack
 list rators;                    // Operator (return, linkage) stack
 integer pc = -1;                // Program counter, indexes "nodes".
@@ -180,16 +187,39 @@ ret() {
 
 compile_op(integer i) {
     nodes += [i];
+    ++here;
     // If it's a call then remember it so that we can optimise tail calls.
     // We're allowed to tail to the nucleus dictionary too, so things like
     // "if" and "!" can be tailed-to.
     if (i > 0 || i <= -50) last_op = i;
 }
 
+compile_preop(integer i) {
+    nodes = llListInsertList(nodes, [i], llGetListLength(nodes) - 1);
+    ++here;
+    // We don't know what the last op is anymore.
+    last_op = -1;
+}
+
+compile_opover(integer a, integer i) {
+    integer index = a - there;
+    nodes = llListReplaceList(nodes, [i], index, index);
+}
+
 compile_list(list l) {
     nodes += l;
+    here += llGetListLength(l);
     // This is used for literals so we can't optimise tails.
     last_op = -1;
+}
+
+compile_send() {
+    llMessageLinked(LINK_THIS,
+                    0x51A20001,
+                    llDumpList2String(nodes, dump_separator),
+                    script_key);
+    nodes = [];
+    there = here;
 }
 
 
@@ -206,9 +236,10 @@ dump() {
     info("program = " + program);
     info("program line = " + (string)program_line);
     info("dict = " + llDumpList2String(dict, " "));
-    info("nodes = " + llDumpList2String(nodes, " "));
+    info("here = " + (string)here);
     info("compiling = " + (string)compiling);
     info((string)llGetFreeMemory() + " bytes free");
+    llMessageLinked(LINK_THIS, 0x51a20020, "", script_key);
     // TODO: Could provide a backtrace by looking up the rators in the
     // dictionary.
 }
@@ -248,47 +279,14 @@ run() {
     // trace(1, "step pc = " + (string)pc + " rators = " + llDumpList2String(rators, "|"));
 
     if(pc >= 0) {                // Executing compiled code?
-    @next_op;
-        integer op = llList2Integer(nodes, pc++);
-        if(op <= 0) {            // Special in-line opcode?
-            if(op == -1) {        // return
-                if (tracing >= 2) pos("ret");
-                ret();
-                jump next;
-            }
-            if(op == -5) {      // tail call
-                pc = llList2Integer(nodes, pc++);
-                if (tracing >= 1) pos("tail");
-                jump next;
-            }
-            if(op == -2) {        // literal integer
-                push_integer(llList2Integer(nodes, pc++));
-                jump next_op;
-            }
-            if(op == -3) {        // literal string
-                push_string(llList2String(nodes, pc++));
-                jump next_op;
-            }
-            if(op == -4) {       // rator to rand
-                // Technically this is possible out-of-line but it involves
-                // more list operations.
-                push_integer(pop_rator());
-                jump next_op;
-            }
-            if(op == 0) {       // return from empty stack etc.
-                error("Zero operator fault.");
-                dump();
-                abort();
-                jump stop;
-            }
-            // Fall through if unrecognized negative op.
-        }
-        // Call the operator
-        // trace(1, "call " + (string)op);
-        push_rator(pc);
-        pc = op;
-        if (tracing >= 1) pos("call");
-        jump next;
+        // Ask the VM to execute
+        push_integer(pc);
+        llMessageLinked(LINK_THIS,
+                        0x51a20010,
+                        llDumpList2String(rands, dump_separator),
+                        script_key);
+        // Wait for a reply from the VM
+        return;
     }
 
     // If pc is -1 then we are returning to the interpreter after making
@@ -309,7 +307,7 @@ run() {
             dict += [word, entry];
             ret();
         } else if(pc == -50) {  // "{", start block
-            push_integer(llGetListLength(nodes));   // remember here
+            push_integer(here);
             if (compiling)
                 compile_op(0);     // placeholder for call over block
             push_integer(compiling);
@@ -323,8 +321,8 @@ run() {
                 jump stop;
             }
             if (last_op != -1) {  // tail call possible?
-                nodes = llListInsertList(nodes, [-5], llGetListLength(nodes) - 1);
-                last_op = -1;
+                // Insert a tail operator before the last op.
+                compile_preop(-5);
             } else {
                 // Append a ret op to the block contents
                 compile_op(-1);
@@ -337,11 +335,13 @@ run() {
                 // Replace the placeholder before the block with a call to
                 // here followed by a R> operation, so that the block entry
                 // point ends up on the stack at run-time.
-                nodes = llListReplaceList(nodes, [llGetListLength(nodes)], index, index);
+                compile_opover(index, here);
                 compile_op(-4);
-            } else
+            } else {
                 // Just push the entry point.
                 push_integer(index);
+                compile_send();
+            }
             ret();
         } else if(pc == -71) {  // "!", call block
             // Replace the current PC with the stack top and do _not_ return.
@@ -351,7 +351,7 @@ run() {
             // Compile a new operator which, when called, pushes itself onto
             // the stack and tails to its argument, and is thus the fixed
             // point of its argument.
-            integer index = llGetListLength(nodes);
+            integer index = here;
             compile_list([-2, index,
                           -5, pop_integer()]);
             push_integer(index);
@@ -368,7 +368,10 @@ run() {
         } else {
             // External call
             // trace(1, "ecall pc = " + (string)pc + " rators = " + llDumpList2String(rators, " "));
-            llMessageLinked(LINK_THIS, pc, llDumpList2String(rands, "|"), script_key);
+            llMessageLinked(LINK_THIS,
+                            pc,
+                            llDumpList2String(rands, dump_separator),
+                            script_key);
             return;                    // Wait for reply
         }
         jump next;
@@ -455,7 +458,7 @@ run() {
     // instructions.
 @stop;
     running = FALSE;
-    info("Ready.");
+    info("Ready.  " + (string)llGetFreeMemory() + " bytes free.");
 }
 
 run_string(string s) {
@@ -515,19 +518,20 @@ default {
         trace(1, "Found libraries " + llDumpList2String(lib_scripts, " "));
 
         // Request dictionary entry registration
-        llMessageLinked(LINK_THIS, -2, "", script_key);
+        llMessageLinked(LINK_THIS, 0x51a20030, "", script_key);
     }
 
     link_message(integer sender_num, integer num, string str, key id) {
         trace(2, "link_message(" + (string)sender_num + ", " + (string)num + ", \"" + str + "\", " + (string)id + ")");
-        if(num != -3) return;
-        integer lib_index = llListFindList(lib_scripts, [id]);
-        if(lib_index == -1) return;
-        string name = llList2String(lib_scripts, lib_index + 1);
-        trace(1, "Library \"" + name + "\" registered.");
-        dict += llParseStringKeepNulls(str, ["|"], []);
-        libs += [id, name];
-        if (setup_done()) state go;
+        if (num == 0x51a20031) {
+            integer lib_index = llListFindList(lib_scripts, [id]);
+            if(lib_index == -1) return;
+            string name = llList2String(lib_scripts, lib_index + 1);
+            trace(1, "Library \"" + name + "\" registered.");
+            dict += llParseStringKeepNulls(str, [dump_separator], []);
+            libs += [id, name];
+            if (setup_done()) state go;
+        }
     }
 
     // This is just used for getting the information from the config notecard.
@@ -654,9 +658,13 @@ state go {
     link_message(integer sender_num, integer num, string str, key id) {
         trace(2, "link_message(" + (string)sender_num + ", " +
                  (string)num + ", \"" + str + "\", " + (string)id + ")");
-        if(num != -1) return;
-        rands = llParseStringKeepNulls(str, ["|"], []);
-        ret();
-        run();
+        if (num == 0x51a20011 && id == script_key) { // return to me
+            rands = llParseStringKeepNulls(str, [dump_separator], []);
+            ret();
+            run();
+        } else if (num == 0x51a20012) { // VM fault
+            abort();
+            // TODO: Not sure what to do next!
+        }
     }
 }

@@ -1,5 +1,21 @@
 "fact" {
-    { dup 1 - fact * }
-    { 1 }
-    dup 0 = if
+    over 0 =
+    { drop drop 1 }
+    { over 1 - swap ! * }
+    if
+} recursive  ;
+
+"fact-loop" {
+    over 0 =
+    { drop drop }
+    {
+        rot 2 pick *
+        rot 1 -
+        rot !
+    }
+    if
+} recursive ;
+
+"ifact" {
+    1 swap fact-loop
 } ;
