@@ -4,10 +4,12 @@
 //
 // Provides basic operations to the Forth Interpreter.  In here should go everything which
 // is general purpose but which doesn't need access to the internals.
+//
+// http://www.firmworks.com/QuickRef.html
 
 string script;                  // Script name
 key script_key;                 // This script's key 
-integer version = 207;          // Script version
+integer version = 208;          // Script version
 integer debug = 1;              // Debugging level, 0 for none
 
 // This string contains Unicode character U+E000 from the Private Use Area
@@ -31,6 +33,10 @@ list dict = [
     "2dup", -1204,
     "pick", -1205,
     "rot", -1206,
+    "-rot", -1207,
+    "nip", -1208,
+    "tuck", -1209,
+    "roll", -1210,
     "append", -1300
 ];
 
@@ -61,52 +67,89 @@ string pop_string() {
 
 // This function is duplicated in the "Forth VM" script.
 integer builtin(integer num) {
-    if(num == -1000)        // +
-        push_integer(pop_integer() + pop_integer());
-    else if(num == -1001) { // -
-        integer y = pop_integer();
-        integer x = pop_integer();
-        push_integer(x - y);
-    } else if(num == -1002) // *
-        push_integer(pop_integer() * pop_integer());
-    else if(num == -1003) { // /
-        integer y = pop_integer();
-        integer x = pop_integer();
-        push_integer(x / y);
+    if(num == -1000) {      // +
+        rands = llListReplaceList(
+            rands,
+            [llList2Integer(rands, 0) + llList2Integer(rands, 1)],
+            0, 1
+        );
+    } else if(num == -1001) { // -
+        rands = llListReplaceList(
+            rands,
+            [llList2Integer(rands, 1) - llList2Integer(rands, 0)],
+            0, 1
+        );
+    } else if(num == -1002) { // *
+        rands = llListReplaceList(
+            rands,
+            [llList2Integer(rands, 0) * llList2Integer(rands, 1)],
+            0, 1
+        );
+    } else if(num == -1003) { // /
+        rands = llListReplaceList(
+            rands,
+            [llList2Integer(rands, 1) / llList2Integer(rands, 0)],
+            0, 1
+        );
     } else if(num == -1004) { // =
-        string y = pop_string();
-        string x = pop_string();
-        push_integer(x == y);
-    } else if(num == -1100) // .
+        rands = llListReplaceList(
+            rands,
+            [llList2String(rands, 0) == llList2String(rands, 1)],
+            0, 1
+        );
+    } else if(num == -1100) { // .
         llOwnerSay(llDumpList2String(rands, " "));
-    else if(num == -1200)   // drop
-        pop_string();
-    else if(num == -1201) { // dup
-        push_string(llList2String(rands, 0));
+    } else if(num == -1200) { // drop
+        rands = llDeleteSubList(rands, 0, 0);
+    } else if(num == -1201) { // dup
+        rands = llListInsertList(rands, llList2List(rands, 0, 0), 0);
     } else if(num == -1202) { // swap
-        string y = pop_string();
-        string x = pop_string();
-        push_string(y);
-        push_string(x);
+        rands = llListReplaceList(
+            rands,
+            llList2List(rands, 1, 1) + llList2List(rands, 0, 0),
+            0, 1
+        );
     } else if(num == -1203) { // over
-        push_string(llList2String(rands, 1));
+        rands = llListInsertList(rands, llList2List(rands, 1, 1), 0);
     } else if(num == -1204) { // 2dup
-        rands = (rands=[]) + llList2List(rands, 0, 1) + rands;
+        rands = llListInsertList(rands, llList2List(rands, 0, 1), 0);
     } else if(num == -1205) { // pick
         integer i = pop_integer();
-        push_string(llList2String(rands, i));
+        rands = llListInsertList(rands, llList2List(rands, i, i), 0);
     } else if(num == -1206) { // rot
-        integer i = pop_integer();
-        integer j = pop_integer();
-        integer k = pop_integer();
-        push_integer(j);
-        push_integer(i);
-        push_integer(k);
+        rands = llListReplaceList(
+            rands,
+            llList2List(rands, 2, 2) + llList2List(rands, 0, 1),
+            0, 2
+        );
     } else if(num == -1300) { // append
-        string y = pop_string();
-        string x = pop_string();
-        push_string(x + y);
-    } else
+        rands = llListInsertList(
+            rands,
+            [llList2String(rands, 1) + llList2String(rands, 0)],
+            0
+        );
+    } else if (num == -1207) { // -rot
+        rands = llListReplaceList(
+            rands,
+            llList2List(rands, 1, 2) + llList2List(rands, 0, 0),
+            0, 2
+        );
+    } else if (num == -1208) { // nip
+        rands = llDeleteSubList(rands, 1, 1);
+    } else if (num == -1209) { // tuck
+        rands = llListInsertList(
+            rands,
+            llList2List(rands, 0, 0),
+            2
+        );
+    } else if (num == -1210) { // roll
+        integer i = pop_integer();
+        rands = llListReplaceList(
+            rands,
+            llList2List(rands, i, i) + llList2List(rands, 0, i - 1),
+            0, i
+        );
+    } else 
         return FALSE;
     return TRUE;
 }

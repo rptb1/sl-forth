@@ -2,59 +2,10 @@
 //
 // Copyright 2008 Richard Brooksby
 // Written on the evening of 2008-01-14.
-//
-// This is a very simple threaded interpreter for a stack-based language
-// which is a kind of Forth
-// <http://en.wikipedia.org/wiki/Forth_(programming_language)>.
-//
-// Each line of the program is split into "segments" delimited by double
-// quotes.  Alternate segments are words to be interpreted, and strings
-// to be pushed on to the stack.  The word segments are split into words
-// delimeted by spaces.  Words that start with digits are assumed to be
-// integers (any trailing junk is discarded) to be pushed on to the stack.
-// Other words are looked up in the dictionary and either executed or
-// compiled, depending on the current mode.
-//
-// Dictionary is a list of pairs: name, entry point.
-//
-// Opcodes > 0 call into the nodes list.
-// Opcode 0 causes an error and is also stored at node 0.  This catches
-// things like returns when there is an empty operand stack.
-//
-// (-99,-1) are reserved for internal operations
-// (-49, -1) are special in-line codes
-// -1 = return
-// -2 = literal integer
-// -3 = literal string
-// -4 = pop rator to rand (return address to stack)
-// -5 = tail call
-// (-99, -50) are built-in operators (see nucelus dictionary below)
-// (-69, -50) are immediate (executed during compilation)
-//
-// Opcodes <= -100 cause link messages and the interpreter waits
-// for a reply.  The operand stack is packed up in the link message string
-// separated by vertical bars ("|") and the reply should have a number of
-// -1 and a replacement stack similarly packed.  The key is not used.
-//
-// When pc is -1 then we are executing words from a source program or chat
-// input.  Otherwise we are exeucting compiled code in the nodes memory.
-//
-// TODO
-// 1. There could be a stack of program notecards and notecard lines, so
-//    that programs could execute each other.  This would be easy to add.
-// 6. There should perhaps be a way of dumping the compiled nodes and
-//    dictionary to a script which could also be protected so that Forth
-//    developers can give away unmodifiable compiled Forth systems.
-// 8. The small integers could be special small positive opcodes so that they
-//    take up less space.
-// 11. Create a UUID to attach to all messages to distinguish Forth messages
-//     from others.
-// 12. Should refresh listen timeout at Ready prompt after result that came from
-//     listening.
 
 string script;                  // Script name
 key script_key;                 // This script's key
-integer version = 600;          // Script version
+integer version = 601;          // Script version
 integer debug = 2;              // Debugging level, 0 for none
 
 // This string contains Unicode character U+E000 from the Private Use Area
@@ -137,16 +88,9 @@ pos(string prefix) {
          llDumpList2String(rators, " "));
 }
 
-integer is_digit(string s) {
-    return llSubStringIndex("0123456789", s) != -1;
-}
-
 integer is_integer(string s) {
-    integer l = llStringLength(s);
-    return (l == 1 && is_digit(s)) ||
-           (l > 1 &&
-            llGetSubString(s, 0, 0) == "-" &&
-            is_digit(llGetSubString(s, 1, 1)));
+    integer i = (integer)s;
+    return (i != 0 && s == (string)i) || s == "0";
 }
 
 push_integer(integer i) {
@@ -499,7 +443,7 @@ default {
             trace(1, "Reading from notecard \"" + config + "\".");
             config_query = llGetNotecardLine(config, config_line++);
         }
-        
+
         // TODO: Should transition to new state here only when configuration
         // is complete, so that config can change things like lib_prefix.
 

@@ -1,0 +1,58 @@
+This is a very simple threaded interpreter for a stack-based language which is a kind of Forth <http://en.wikipedia.org/wiki/Forth_(programming_language)>.
+
+
+SYNTAX
+
+Each line of the program is split into "segments" delimited by double quotes.  Alternate segments are words to be interpreted, and strings to be pushed on to the stack.  The word segments are split into words delimeted by spaces.  Words that start with digits are assumed to be integers (any trailing junk is discarded) to be pushed on to the stack. Other words are looked up in the dictionary and either executed or compiled, depending on the current mode.
+
+
+DICTIONARY
+
+Dictionary is a list of pairs: name, entry point.
+
+
+OPCODES
+
+-99 to 99 push themselves onto the stack, for speed and space.  Other integers are prefixed with the integer literal opcode.
+
+100 and up are interpreted as calls to other operators.  This means that the first compiled node is indexed by 100.
+
+-999 to -100 are reserved for special operations.
+
+-100 return
+-101 tail call
+-102 pop rator to rand (return address to stack)
+-110 literal integer
+-111 literal string
+-112 literal float
+-113 literal vector
+-114 literal rotation
+
+-299 to -200 are immediate operators, executed during compilation
+-399 to -300 are other special operators by the interpreter
+-499 to -400 are other special operators by the VM
+-999 to -500 are built-in library operators
+
+Opcodes <= -1000 cause link messages and the interpreter or VM waits for a reply.
+
+OLD SCHEME
+
+Opcodes > 0 call into the nodes list. Opcode 0 causes an error and is also stored at node 0.  This catches things like returns when there is an empty operand stack.
+
+(-99,-1) are reserved for internal operations
+(-49, -1) are special in-line codes
+-1 = return
+-2 = literal integer
+-3 = literal string
+-4 = pop rator to rand (return address to stack)
+-5 = tail call
+(-99, -50) are built-in operators (see nucelus dictionary below)
+(-69, -50) are immediate (executed during compilation)
+
+Opcodes <= -100 cause link messages and the interpreter waits for a reply.  The operand stack is packed up in the link message string separated by vertical bars ("|") and the reply should have a number of -1 and a replacement stack similarly packed.  The key is not used.
+
+When pc is -1 then we are executing words from a source program or chat input.  Otherwise we are exeucting compiled code in the nodes memory.
+
+
+LINK MESSAGES
+
