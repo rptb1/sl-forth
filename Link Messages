@@ -1,0 +1,12 @@
+0x51a20001      VM      compile
+0x51a20010      VM      run
+0x51a20011      VM      return
+0x51a20012      VM      zero operator fault
+0x51a20020      VM      dump
+
+0x51a21000      Int     run
+0x51a21001      Int     ready
+0x51a21010      Int     Unknown word
+0x51a21011      Int     Word may not resemble number
+0x51a21012      Int     End of block when compiling
+
