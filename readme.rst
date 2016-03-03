@@ -28,7 +28,7 @@ my Second Life earnings.
 I wrote `this article`_ about a theoretical language called "Fix" based on my
 experience making this [RB-2008-01-20]_.
 
-.. _`this article`: http://chard.livejournal.com/56744.html
+.. _`this article`: fix.rst
 
 References
 ----------
