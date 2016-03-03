@@ -15,7 +15,9 @@ I wrote it because in LSL you can't write simple things like:
   give(x, "thing");
   give(x, "another thing");
 
-(For further details, see section "The Problem" of the Manual.)
+(For further details, see section "The Problem" of `the manual`_.)
+
+.. _`the manual`: Manual.rst
 
 This interpreter was genuinely useful and made me real money!  It made
 it possible for me to re-pack all the virtual goods in my virtual shop
