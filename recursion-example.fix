@@ -1,0 +1,6 @@
+"fact" {
+    over 0 =
+    { drop drop 1 }
+    { over 1 - swap ! * }
+    if
+} recursive ;
